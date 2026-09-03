@@ -22,13 +22,18 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 /* ---------------- Smooth scroll (Lenis) ----------------
-   Buttery-smooth inertia scrolling across the whole page.
-   Falls back silently to native scrolling if Lenis fails to
-   load (e.g. offline / CDN blocked) or if the user has
-   prefers-reduced-motion enabled. ---------------- */
+   Buttery-smooth inertia scrolling for desktop mouse-wheel users.
+   Deliberately OFF on touch devices: Lenis's syncTouch mode re-simulates
+   scrolling by hand in JS on every touchmove, which feels noticeably
+   heavier/laggier than the browser's native, GPU-composited touch
+   scrolling — mobile is faster and smoother left alone. Also falls back
+   silently to native scrolling if Lenis fails to load (e.g. offline /
+   CDN blocked) or if the user has prefers-reduced-motion enabled. ---------------- */
 function initSmoothScroll() {
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   if (prefersReducedMotion) return;
+  const isTouch = window.matchMedia('(hover: none), (pointer: coarse)').matches;
+  if (isTouch) return; // let mobile use native touch scrolling — it's faster
   if (typeof Lenis === 'undefined') return; // CDN not loaded — native scroll still works fine
 
   const lenis = new Lenis({
@@ -36,9 +41,6 @@ function initSmoothScroll() {
     easing: (t) => 1 - Math.pow(1 - t, 3),
     smoothWheel: true,
     wheelMultiplier: 1,
-    touchMultiplier: 1.5,
-    syncTouch: true,
-    syncTouchLerp: 0.075,
   });
 
   function raf(time) {
