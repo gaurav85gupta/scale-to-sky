@@ -35,11 +35,17 @@
 /* ---- Reset ---- */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
-/* Scroll smoothing is handled by Lenis (js/main.js). Native CSS
-   smooth-scroll is intentionally left as "auto" — running both at
-   once causes the scroll to feel laggy/delayed, since the browser's
-   native smoothing fights Lenis's own animation frame loop. */
+/* Scroll smoothing on desktop is handled by Lenis (js/main.js), which
+   is deliberately skipped on touch devices — see initSmoothScroll().
+   Native CSS smooth-scroll stays "auto" (off) on desktop, since running
+   it alongside Lenis causes the scroll to feel laggy/delayed (the
+   browser's native smoothing fights Lenis's own animation frame loop).
+   On touch devices, native smooth-scroll is turned back on below so
+   anchor-link taps still animate, at zero JS cost. */
 html { scroll-behavior: auto; }
+@media (hover: none), (pointer: coarse) {
+  html { scroll-behavior: smooth; }
+}
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after {
