@@ -402,12 +402,15 @@ body.menu-open { overflow: hidden; }
   pointer-events: none;
 }
 
-/* ---- ambient background: near-invisible grid + glow + arc ---- */
+/* ---- ambient background: near-invisible grid + glow + arc ----
+   overflow:hidden here backs up .hero's own overflow:hidden as a
+   second containment layer for these decorative absolute elements. */
 .hero-field {
   position: absolute;
   inset: 0;
   z-index: 0;
   pointer-events: none;
+  overflow: hidden;
 }
 .hero-grid-lines {
   position: absolute;
@@ -421,7 +424,7 @@ body.menu-open { overflow: hidden; }
 }
 .hero-glow {
   position: absolute;
-  width: 680px; height: 680px;
+  width: min(680px, 100vw); height: min(680px, 100vw);
   top: -20%;
   left: 32%;
   transform: translateX(-50%);
@@ -430,7 +433,7 @@ body.menu-open { overflow: hidden; }
 }
 .hero-glow-warm {
   position: absolute;
-  width: 560px; height: 560px;
+  width: min(560px, 100vw); height: min(560px, 100vw);
   bottom: -22%;
   right: 6%;
   background: radial-gradient(circle, rgba(217,163,110,0.14), transparent 72%);
@@ -438,8 +441,11 @@ body.menu-open { overflow: hidden; }
 }
 .hero-arc {
   position: absolute;
-  width: 1400px;
-  height: 1400px;
+  /* min(1400px, 100vw) keeps this purely decorative ring from ever
+     being wider than the viewport, as extra insurance beyond
+     .hero-field's overflow:hidden clipping. */
+  width: min(1400px, 100vw);
+  height: min(1400px, 100vw);
   border: 1px solid rgba(109,61,245,0.08);
   border-radius: 50%;
   top: -60%;
@@ -1109,13 +1115,17 @@ body.menu-open { overflow: hidden; }
   .diff-panel::after { animation: none; }
 }
 
-/* Extremely subtle decorative glow — depth only, never decoration */
+/* Extremely subtle decorative glow — depth only, never decoration.
+   right:-140px deliberately lets most of it hang off the panel edge
+   for a soft-corner look; .diff-panel's overflow:hidden clips it.
+   min(380px, 60vw) keeps the box itself from ever outgrowing the
+   panel on narrow widths, as extra insurance beyond that clipping. */
 .diff-panel-glow {
   position: absolute;
   top: -120px;
   right: -140px;
-  width: 380px;
-  height: 380px;
+  width: min(380px, 60vw);
+  height: min(380px, 60vw);
   border-radius: 50%;
   background: radial-gradient(circle, rgba(109, 61, 245, 0.14), transparent 70%);
   pointer-events: none;
@@ -1646,7 +1656,7 @@ body.menu-open { overflow: hidden; }
 .service-detail-visual .big-num {
   font-family: var(--font-display);
   font-weight: 800;
-  font-size: 6rem;
+  font-size: clamp(3.5rem, 11vw, 6rem);
   color: var(--primary);
   opacity: 0.12;
 }
@@ -1833,6 +1843,9 @@ body.menu-open { overflow: hidden; }
 }
 @media (max-width: 560px) {
   .form-grid { grid-template-columns: 1fr; }
+  /* 16px floor prevents iOS Safari from auto-zooming the page when
+     a field is focused — anything smaller triggers that zoom. */
+  .field input, .field select, .field textarea { font-size: 16px; }
 }
 
 /* ============================================================
@@ -1874,7 +1887,12 @@ body.menu-open { overflow: hidden; }
   max-width: 1140px;
   margin: 0 auto;
   display: grid;
-  grid-template-columns: 1.25fr auto 0.75fr;
+  /* minmax(0, ...) on the fr tracks lets this grid actually shrink to
+     fit its container — plain `fr` values are floored by their content's
+     min-content width, which let the grid (and everything in it) render
+     wider than the page at some viewports, inflating horizontal scroll
+     even though nothing looked visually "cut off". */
+  grid-template-columns: minmax(0, 1.25fr) auto minmax(0, 0.75fr);
   gap: 56px;
   align-items: start;
 }
@@ -2022,14 +2040,20 @@ body.menu-open { overflow: hidden; }
 .social-col {
   position: relative;
   padding-top: 4px;
+  /* Contains the decorative ::before glow below, which is intentionally
+     positioned partly outside this column's box (right: -60px) — without
+     clipping here that glow's box extends past the column and inflates
+     the page's horizontal scroll extent at some widths, even though the
+     glow itself is invisible padding with nothing to see. */
+  overflow: hidden;
 }
 .social-col::before {
   content: '';
   position: absolute;
   top: -40px;
   right: -60px;
-  width: 260px;
-  height: 260px;
+  width: min(260px, 60vw);
+  height: min(260px, 60vw);
   background: radial-gradient(circle, rgba(109,61,245,0.07), transparent 72%);
   pointer-events: none;
   z-index: -1;
