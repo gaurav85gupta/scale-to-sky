@@ -25,20 +25,43 @@ document.addEventListener('DOMContentLoaded', () => {
    Buttery-smooth inertia scrolling across the whole page.
    Falls back silently to native scrolling if Lenis fails to
    load (e.g. offline / CDN blocked) or if the user has
-   prefers-reduced-motion enabled. ---------------- */
+   prefers-reduced-motion enabled.
+
+   Desktop only: Lenis's syncTouch mode fights the browser's own
+   momentum scrolling on phones/tablets, which is what makes
+   scrolling feel janky on mobile. Native touch scrolling on
+   mobile is already smooth, so we skip Lenis there entirely. ---------------- */
 function initSmoothScroll() {
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   if (prefersReducedMotion) return;
   if (typeof Lenis === 'undefined') return; // CDN not loaded — native scroll still works fine
+
+  const isTouchDevice = window.matchMedia('(pointer: coarse)').matches
+    || 'ontouchstart' in window
+    || navigator.maxTouchPoints > 0;
+
+  if (isTouchDevice) {
+    // Still wire up smooth in-page anchor links using native scroll,
+    // without engaging Lenis's per-frame touch takeover.
+    document.querySelectorAll('a[href^="#"]').forEach((link) => {
+      link.addEventListener('click', (e) => {
+        const targetId = link.getAttribute('href');
+        if (!targetId || targetId === '#') return;
+        const target = document.querySelector(targetId);
+        if (!target) return;
+        e.preventDefault();
+        const top = target.getBoundingClientRect().top + window.pageYOffset - 84;
+        window.scrollTo({ top, behavior: 'smooth' });
+      });
+    });
+    return;
+  }
 
   const lenis = new Lenis({
     duration: 0.5,
     easing: (t) => 1 - Math.pow(1 - t, 3),
     smoothWheel: true,
     wheelMultiplier: 1,
-    touchMultiplier: 1.5,
-    syncTouch: true,
-    syncTouchLerp: 0.075,
   });
 
   function raf(time) {
