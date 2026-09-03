@@ -1293,28 +1293,85 @@ body.menu-open { overflow: hidden; }
   .diff-row { padding: 14px 22px; }
 }
 
-/* ---- Mobile: stacked mini comparison blocks ---- */
-@media (max-width: 640px) {
-  .diff-panel-head { padding: 14px 20px; }
-  .diff-col-label { font-size: 0.7rem; }
+/* ---- Mobile: two stacked blocks (all Others, then all Scale To Sky) ---- */
+.diff-rows-mobile { display: none; }
 
-  .diff-row {
-    min-height: 0;
-    padding: 16px 20px;
-    align-items: flex-start;
+@media (max-width: 640px) {
+  /* Hide the desktop row-by-row comparison and its top label bar */
+  .diff-panel-head,
+  .diff-rows-desktop { display: none; }
+
+  .diff-rows-mobile {
+    display: block;
+    position: relative;
+    z-index: 1;
   }
-  .diff-row-grid {
-    grid-template-columns: 1fr;
+
+  .diff-block { padding: 22px 20px; }
+  .diff-block-others { border-bottom: 1px solid var(--border); }
+
+  .diff-block-label {
+    font-family: var(--font-display);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    display: inline-flex;
+    align-items: center;
     gap: 8px;
+    padding: 4px 14px;
+    border-radius: 100px;
+    margin-bottom: 16px;
   }
-  .diff-row-num { margin-bottom: 6px; }
-  .diff-arrow {
-    justify-self: flex-start;
-    transform: rotate(90deg);
-    margin: 2px 0 2px 2px;
+  .diff-block-label-others {
+    color: var(--muted);
+    background: var(--surface);
   }
-  .diff-row:hover .diff-arrow { transform: rotate(90deg) translateX(0); }
-  .diff-title-sts { padding-left: 14px; }
+  .diff-block-label-sts {
+    color: #fff;
+    background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+  }
+  .diff-block-label-sts .diff-dot { background: #fff; }
+
+  .diff-block-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .diff-block-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    font-family: var(--font-display);
+    font-size: 1rem;
+    line-height: 1.4;
+    color: var(--muted);
+    font-weight: 500;
+  }
+  .diff-block-item-sts {
+    color: var(--text);
+    font-weight: 700;
+  }
+
+  .diff-block-icon {
+    flex-shrink: 0;
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.7rem;
+    margin-top: 1px;
+  }
+  .diff-block-icon-minus {
+    color: var(--muted);
+    border: 1px solid var(--border);
+  }
+  .diff-block-icon-check {
+    color: var(--primary);
+    background: var(--primary-light);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
