@@ -16,9 +16,11 @@ document.addEventListener('DOMContentLoaded', () => {
   initContactForm();
   initPageTransitions();
   initHeroParallax();
+  initHeroServicesTransition();
   initLogoReveal();
   initCardParallax();
   initFAQ();
+  initServiceModal();
 });
 
 /* ---------------- Smooth scroll (Lenis) ----------------
@@ -36,18 +38,39 @@ function initSmoothScroll() {
   if (isTouch) return; // let mobile use native touch scrolling — it's faster
   if (typeof Lenis === 'undefined') return; // CDN not loaded — native scroll still works fine
 
-  const lenis = new Lenis({
-    duration: 0.5,
-    easing: (t) => 1 - Math.pow(1 - t, 3),
-    smoothWheel: true,
-    wheelMultiplier: 1,
-  });
+  let lenis = null;
+  let rafId = null;
 
   function raf(time) {
     lenis.raf(time);
-    requestAnimationFrame(raf);
+    rafId = requestAnimationFrame(raf);
   }
-  requestAnimationFrame(raf);
+
+  function create() {
+    lenis = new Lenis({
+      duration: 0.5,
+      easing: (t) => 1 - Math.pow(1 - t, 3),
+      smoothWheel: true,
+      wheelMultiplier: 1,
+    });
+    window.__lenis = lenis;
+    rafId = requestAnimationFrame(raf);
+  }
+
+  create();
+
+  // Lenis.stop() only pauses its scroll updates — it keeps its wheel
+  // listener attached on the document and still intercepts/preventDefaults
+  // wheel events, which is what made scrolling inside the modal feel
+  // sluggish/slow-motion. Fully destroying it (and recreating it on close)
+  // removes those listeners so the modal gets 100% native wheel scrolling.
+  window.__lenisSuspend = () => {
+    if (rafId) cancelAnimationFrame(rafId);
+    if (lenis) { lenis.destroy(); lenis = null; window.__lenis = null; }
+  };
+  window.__lenisResume = () => {
+    if (!lenis) create();
+  };
 
   // Keep in-page anchor links (e.g. nav "#services") working smoothly
   // through Lenis instead of the browser's native jump/CSS smooth-scroll.
@@ -58,7 +81,7 @@ function initSmoothScroll() {
       const target = document.querySelector(targetId);
       if (!target) return;
       e.preventDefault();
-      lenis.scrollTo(target, { offset: -84 }); // offset for fixed header height
+      if (window.__lenis) window.__lenis.scrollTo(target, { offset: -84 }); // offset for fixed header height
     });
   });
 }
@@ -320,6 +343,16 @@ function initContactForm() {
 
   const success = document.querySelector('.form-success');
 
+  // Preselect the service dropdown when arriving via ?service=slug
+  // (e.g. from a service modal's "Let's Talk About This Service" CTA).
+  const serviceField = form.querySelector('#service');
+  if (serviceField) {
+    const requestedService = new URLSearchParams(window.location.search).get('service');
+    if (requestedService && [...serviceField.options].some(opt => opt.value === requestedService)) {
+      serviceField.value = requestedService;
+    }
+  }
+
   const validators = {
     name: (v) => v.trim().length >= 2 || 'Please enter your full name.',
     email: (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim()) || 'Enter a valid email address.',
@@ -415,7 +448,7 @@ function initPageTransitions() {
       e.preventDefault();
       overlay.style.pointerEvents = 'auto';
       overlay.style.opacity = '1';
-      setTimeout(() => { window.location.href = url; }, 200);
+      setTimeout(() => { window.location.href = url; }, 120);
     });
   });
 }
@@ -450,6 +483,172 @@ function initHeroParallax() {
       card.style.setProperty('--py', '0px');
     });
   });
+}
+
+/* ---------------- Hero → Services layered scroll transition ----------------
+   Home page only. Drives a single CSS custom property, --hst-progress
+   (0 → 1), on .hero-scroll-wrapper as the user scrolls through it. The
+   Hero is sticky-pinned via CSS (see style.css) while the Services
+   section — opaque white, higher z-index — translates up over it.
+   CSS reads --hst-progress for the actual transform/opacity math, so
+   this function only ever computes and writes one number per frame.
+
+   Reuses window.__lenis (from initSmoothScroll) for scroll position
+   when available so both systems stay in sync; falls back to native
+   window.scrollY otherwise. No second scroll-smoothing system, no
+   extra scroll listeners — position is sampled inside a single rAF
+   loop that only runs while the wrapper is near the viewport. ---------------- */
+function initHeroServicesTransition() {
+  const wrapper = document.querySelector('.hero-scroll-wrapper');
+  const hero = wrapper && wrapper.querySelector('.hero');
+  const cover = wrapper && wrapper.querySelector('.hero-scroll-cover');
+  if (!wrapper || !hero || !cover) return;
+
+  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (prefersReducedMotion) return; // CSS reduced-motion block also guards this, but skip the rAF loop entirely
+
+  const isMobile = window.matchMedia('(max-width: 640px)').matches;
+  if (isMobile) return; // simplified, non-sticky mobile experience per spec — plain stacked sections
+
+  wrapper.classList.add('hst-active');
+
+  // Distance (px) over which the transition completes, measured from the
+  // top of the wrapper. Tied to the Hero's own height so it scales with
+  // viewport/content rather than a hardcoded pixel value, and capped so
+  // it's never an unnecessarily long pinned section. Lowered from
+  // hero-height*0.85 (max 900px) to hero-height*0.45 (max 500px) — the
+  // longer distance meant the Hero stayed sticky-pinned (visually static
+  // while only scaling/fading) for a large chunk of scroll input, which
+  // read as the page "slowing down" compared to normal sections where
+  // content displaces per scroll unit. Shorter distance = same wheel
+  // input completes the transition sooner and normal scrolling resumes.
+  let travelDistance = Math.min(hero.offsetHeight * 0.45, 500);
+  let wrapperTop = 0;
+  let running = false;
+  let rafId = null;
+  // displayedProgress lerps toward targetProgress every frame instead of
+  // jumping straight to the raw scroll-derived value. Combined with the
+  // short CSS transition on the transform itself, this removes the
+  // step-y/jerky feel of the zoom on fast or trackpad scrolling, without
+  // making the effect noticeably lag behind the actual scroll position.
+  let displayedProgress = 0;
+  let targetProgress = 0;
+
+  function measure() {
+    // getBoundingClientRect + scroll position combine to give an
+    // absolute offset without depending on a specific scroll container.
+    const rect = wrapper.getBoundingClientRect();
+    wrapperTop = rect.top + (window.__lenis ? window.__lenis.scroll : window.scrollY);
+    travelDistance = Math.min(hero.offsetHeight * 0.45, 500);
+  }
+
+  function currentScroll() {
+    return window.__lenis ? window.__lenis.scroll : window.scrollY;
+  }
+
+  function computeTarget() {
+    const y = currentScroll();
+    const raw = (y - wrapperTop) / travelDistance;
+    const clamped = Math.min(Math.max(raw, 0), 1);
+    // Ease-out so the motion is brisk at first and settles gently into
+    // place, rather than a mechanical linear rise.
+    targetProgress = 1 - Math.pow(1 - clamped, 2);
+  }
+
+  function frame() {
+    computeTarget();
+    // Lerp toward the target each frame. The CSS transition on the
+    // transform properties has been removed entirely — it was adding a
+    // second layer of scroll-response delay on top of this lerp, which
+    // is what made the Hero→Services zone feel slower than the rest of
+    // the page even after the lerp factor was raised. This lerp alone
+    // now does all the smoothing: fast enough (0.35) to track scroll
+    // closely, still enough to erase raw per-frame jitter.
+    displayedProgress += (targetProgress - displayedProgress) * 0.35;
+    // Snap once close enough so the value settles exactly at 0/1 instead
+    // of crawling asymptotically forever.
+    if (Math.abs(targetProgress - displayedProgress) < 0.0005) {
+      displayedProgress = targetProgress;
+    }
+    wrapper.style.setProperty('--hst-progress', displayedProgress.toFixed(4));
+
+    // Once fully settled at either end (0 or 1), stop rAF entirely rather
+    // than continuing to tick every frame while the user scrolls through
+    // the sections below.
+    const settled = displayedProgress === targetProgress && (displayedProgress === 0 || displayedProgress === 1);
+    if (running && !settled) {
+      rafId = requestAnimationFrame(frame);
+    } else {
+      rafId = null;
+      // Drop will-change once settled (see .hst-transitioning in
+      // style.css). Left on permanently, the browser keeps all 8
+      // transformed Hero layers GPU-composited for the rest of the
+      // page's life, which is the main remaining cost while scrolling
+      // through Services/Why-Different/etc — this removes it as soon
+      // as the transform value stops changing.
+      wrapper.classList.remove('hst-transitioning');
+    }
+  }
+
+  function start() {
+    if (running) return;
+    running = true;
+    wrapper.classList.add('hst-transitioning');
+    measure();
+    computeTarget();
+    displayedProgress = targetProgress;
+    rafId = requestAnimationFrame(frame);
+  }
+
+  function stop() {
+    if (!running) return;
+    running = false;
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+    wrapper.classList.remove('hst-transitioning');
+  }
+
+  // Restart the settled loop on scroll if progress has room to change
+  // again (e.g. user scrolled back up into range) but the IO hasn't
+  // fired yet. Cheap: only does work when running and currently idle.
+  function onScrollWhileSettled() {
+    if (running && rafId === null) {
+      wrapper.classList.add('hst-transitioning');
+      rafId = requestAnimationFrame(frame);
+    }
+  }
+  window.addEventListener('scroll', onScrollWhileSettled, { passive: true });
+
+  // Only measure/listen while the wrapper is actually near the viewport —
+  // avoids any scroll work for the rest of the page's lifetime. Bottom
+  // margin kept small (not 200px) since frame() now self-stops once
+  // settled anyway — this just avoids a big span where IO keeps the loop
+  // technically "running" (even though frame() no longer ticks) for no
+  // benefit while the user is well past Services.
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting) start();
+      else stop();
+    });
+  }, { rootMargin: '200px 0px 0px 0px' });
+  io.observe(wrapper);
+
+  window.addEventListener('resize', () => {
+    // If the viewport is resized down into the mobile breakpoint mid-session
+    // (e.g. rotating a device or resizing a desktop window), drop back to
+    // the plain stacked layout rather than leaving sticky positioning
+    // active at a width it wasn't designed for.
+    if (window.matchMedia('(max-width: 640px)').matches) {
+      stop();
+      wrapper.classList.remove('hst-active');
+      wrapper.style.removeProperty('--hst-progress');
+      return;
+    }
+    if (!wrapper.classList.contains('hst-active')) {
+      wrapper.classList.add('hst-active');
+    }
+    if (running) measure();
+  }, { passive: true });
 }
 
 /* ---------------- Nav logo: brand wordmark letter-reveal ----------------
@@ -560,4 +759,247 @@ function initFAQ() {
       btn.setAttribute('aria-expanded', String(!isOpen));
     });
   });
+}
+
+/* ---------------- Services page: service detail modal ----------------
+   One reusable modal, populated from a centralized data object, driven
+   by the URL hash so it works both from in-page card clicks and from
+   direct/incoming links like services.html#meta-ads (e.g. from Home). */
+const SERVICES_DATA = {
+  'social-media-management': {
+    number: '01',
+    title: 'Social Media Management',
+    intro: 'Your social media should feel active, consistent, and true to your brand. We help you plan and create content that gives your audience a reason to keep paying attention.',
+    whatWeDo: 'We handle the day-to-day content side of your social presence so you can focus on your business.',
+    included: ['Content planning', 'Post and reel ideas', 'Captions and creative direction', 'Posting and scheduling', 'Community engagement', 'Content consistency'],
+    whoItsFor: 'Businesses that want to stay active on Instagram and other social platforms without having to manage the entire process themselves.',
+    howItHelps: 'Consistent content keeps your brand visible, builds familiarity, and gives potential customers more reasons to trust you.'
+  },
+  'web-development': {
+    number: '02',
+    title: 'Web Development',
+    intro: 'Your website is often the first serious interaction someone has with your business. We build websites that look professional, work smoothly, and make your business easy to understand.',
+    whatWeDo: 'We design and develop responsive websites around your business, audience, and goals.',
+    included: ['Website planning', 'UI design', 'Frontend development', 'Responsive design', 'Performance optimization', 'Basic SEO-friendly structure', 'Contact / inquiry flows'],
+    whoItsFor: 'Businesses that need a professional website, want to improve an existing one, or need a stronger digital presence.',
+    howItHelps: 'A clear and fast website helps visitors understand what you offer, build trust, and take the next step.'
+  },
+  'video-shoot-editing': {
+    number: '03',
+    title: 'Video Shoot & Editing',
+    intro: 'Good video can show people what your brand feels like before they ever contact you. We create and edit content that is made to capture attention and communicate clearly.',
+    whatWeDo: 'From shooting to final editing, we help turn your ideas, products, services, and spaces into useful brand content.',
+    included: ['Video planning', 'Product / business shoots', 'Short-form video', 'Reel editing', 'Transitions and motion', 'Text and captions', 'Final content formatting'],
+    whoItsFor: 'Restaurants, fashion brands, real estate businesses, local businesses, and brands that need better visual content.',
+    howItHelps: 'Strong visual content helps people understand your business faster and gives your social media and marketing campaigns more to work with.'
+  },
+  'meta-ads': {
+    number: '04',
+    title: 'Meta Ads',
+    intro: 'Getting your business in front of more people is not enough. We focus on reaching people who are more likely to care, enquire, or buy.',
+    whatWeDo: 'We create and manage Facebook and Instagram ad campaigns around your business goals.',
+    included: ['Campaign setup', 'Audience targeting', 'Ad creative direction', 'Campaign monitoring', 'Performance optimization', 'Retargeting where relevant', 'Performance tracking'],
+    whoItsFor: 'Businesses looking to generate more enquiries, leads, bookings, customers, or product sales through Meta platforms.',
+    howItHelps: 'Better targeting and ongoing optimization help your advertising budget work toward meaningful business outcomes instead of simply generating reach.'
+  },
+  'app-development': {
+    number: '05',
+    title: 'App Development',
+    intro: 'If your business has an idea for an app, we help turn that idea into a practical product people can actually use.',
+    whatWeDo: 'We work through the idea, user experience, development, and launch with the goal of keeping the product useful and easy to use.',
+    included: ['Product planning', 'UI/UX design', 'App development', 'Responsive / adaptive experiences', 'Backend integration where required', 'Testing', 'Launch preparation'],
+    whoItsFor: 'Businesses that want to build a customer-facing app, internal business tool, booking system, ordering system, or another custom digital product.',
+    howItHelps: 'A well-planned app can make your service easier to access and give your business a digital product built around the way your customers work.'
+  },
+  'ugc-videos': {
+    number: '06',
+    title: 'UGC Videos',
+    intro: 'People often connect better with content that feels natural. UGC-style videos bring a more personal and relatable voice to your brand.',
+    whatWeDo: 'We create creator-style video content designed to feel native to the platform rather than like a traditional advertisement.',
+    included: ['Video concepts', 'Script development', 'Creator coordination', 'Product/service presentation', 'Short-form editing', 'Multiple creative variations'],
+    whoItsFor: 'Brands that want more relatable content for social media, paid ads, product promotion, or customer-focused campaigns.',
+    howItHelps: 'Authentic-looking content can make your brand feel more approachable and gives you creative material that can be used across organic and paid campaigns.'
+  }
+};
+
+function initServiceModal() {
+  const modal = document.getElementById('serviceModal');
+  const cards = document.querySelectorAll('.service-card[data-service]');
+  if (!modal || !cards.length) return;
+
+  const backdrop = modal.querySelector('.service-modal-backdrop');
+  const panel = modal.querySelector('.service-modal-panel');
+  const closeBtn = modal.querySelector('.service-modal-close');
+  const numberEl = modal.querySelector('.service-modal-number');
+  const titleEl = modal.querySelector('.service-modal-title');
+  const introEl = modal.querySelector('.service-modal-intro');
+  const whatEl = modal.querySelector('.service-modal-whatwedo');
+  const includedEl = modal.querySelector('.service-modal-included');
+  const whoEl = modal.querySelector('.service-modal-who');
+  const howEl = modal.querySelector('.service-modal-how');
+  const ctaEl = modal.querySelector('.service-modal-cta');
+  const titleId = titleEl.id || 'serviceModalTitle';
+  titleEl.id = titleId;
+  modal.setAttribute('aria-labelledby', titleId);
+
+  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  let activeId = null;
+  let lastFocusedCard = null;
+  let closeTimer = null;
+
+  const checkIcon = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8l3.5 3.5L13 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  const render = (id) => {
+    const data = SERVICES_DATA[id];
+    if (!data) return false;
+
+    numberEl.textContent = data.number;
+    titleEl.textContent = data.title;
+    introEl.textContent = data.intro;
+    whatEl.textContent = data.whatWeDo;
+    includedEl.innerHTML = data.included.map(item => `<li>${checkIcon}<span>${item}</span></li>`).join('');
+    whoEl.textContent = data.whoItsFor;
+    howEl.textContent = data.howItHelps;
+    ctaEl.setAttribute('href', `contact.html?service=${id}`);
+
+    return true;
+  };
+
+  const unlockScroll = () => {
+    document.body.classList.remove('modal-open');
+    if (window.__lenisResume) window.__lenisResume();
+  };
+
+  // Even with Lenis stopped, it can still swallow wheel/touch events that
+  // bubble up from inside the modal (since it listens on the document).
+  // Stop propagation right at the panel so native scrolling always wins.
+  ['wheel', 'touchmove'].forEach((evt) => {
+    panel.addEventListener(evt, (e) => { e.stopPropagation(); }, { passive: true });
+  });
+
+  const openModal = (id, opts = {}) => {
+    if (activeId === id && !modal.hidden) return; // already open — avoid a redundant re-render/flicker
+    if (!render(id)) return;
+    activeId = id;
+
+    if (opts.triggerEl) lastFocusedCard = opts.triggerEl;
+
+    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
+    panel.scrollTop = 0;
+    document.body.classList.add('modal-open'); // lock body scroll immediately, cheap
+    modal.hidden = false;
+
+    // Wait a frame before triggering the transition. render() just wrote a
+    // fair amount of innerHTML (the "what's included" list, etc.) — starting
+    // the transition in the very next line forces the browser to lay all of
+    // that out synchronously *and* animate in the same frame, which is what
+    // caused the stutter on open. rAF lets the layout from render() settle
+    // on its own frame first; the second rAF (next frame) is when we flip
+    // the class, so the transition starts from a clean, already-painted state.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        modal.classList.add('is-open');
+      });
+    });
+
+    // Destroying/creating the Lenis instance does real work (removes/attaches
+    // DOM listeners). Doing it in the same frame as the open transition can
+    // cause a dropped frame right as the modal appears, which reads as a
+    // stutter/lag. Deferring it lets the CSS transition kick off smoothly first.
+    requestAnimationFrame(() => {
+      if (window.__lenisSuspend) window.__lenisSuspend();
+    });
+
+    if (!opts.skipFocus) {
+      (prefersReducedMotion ? closeBtn.focus() : setTimeout(() => closeBtn.focus(), 60));
+    }
+
+    if (opts.updateHash !== false) {
+      const newHash = `#${id}`;
+      if (window.location.hash !== newHash) {
+        history.pushState(null, '', newHash);
+      }
+    }
+  };
+
+  const closeModal = (opts = {}) => {
+    if (!activeId) return;
+    modal.classList.remove('is-open');
+    unlockScroll();
+
+    const finish = () => {
+      modal.hidden = true;
+      activeId = null;
+    };
+    if (prefersReducedMotion) {
+      finish();
+    } else {
+      closeTimer = setTimeout(finish, 320);
+    }
+
+    if (opts.returnFocus !== false && lastFocusedCard) {
+      lastFocusedCard.focus({ preventScroll: true });
+    }
+
+    if (opts.updateHash !== false && window.location.hash) {
+      history.pushState(null, '', window.location.pathname + window.location.search);
+    }
+  };
+
+  // Card clicks — open modal, update hash, remember trigger for focus return.
+  cards.forEach(card => {
+    card.addEventListener('click', (e) => {
+      e.preventDefault();
+      const id = card.dataset.service;
+      openModal(id, { triggerEl: card });
+    });
+  });
+
+  closeBtn.addEventListener('click', () => closeModal());
+
+  backdrop.addEventListener('click', () => closeModal());
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.classList.contains('is-open')) closeModal();
+  });
+
+  // Basic focus trap while the modal is open.
+  modal.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab' || !modal.classList.contains('is-open')) return;
+    const focusable = panel.querySelectorAll('a[href], button:not([disabled])');
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  });
+
+  // Hash-driven open/close: handles direct links (services.html#meta-ads),
+  // in-page navigation via history, and the browser Back/Forward buttons.
+  const syncWithHash = () => {
+    const id = window.location.hash.replace('#', '');
+    if (id && SERVICES_DATA[id]) {
+      if (id !== activeId) {
+        // Open the modal immediately — don't wait on a scroll animation first.
+        openModal(id, { updateHash: false, skipFocus: false });
+        const targetCard = document.querySelector(`.service-card[data-service="${id}"]`);
+        if (targetCard) {
+          targetCard.scrollIntoView({ block: 'center', behavior: 'auto' });
+        }
+      }
+    } else if (!id && activeId) {
+      closeModal({ updateHash: false, returnFocus: false });
+    }
+  };
+
+  window.addEventListener('hashchange', syncWithHash);
+
+  // Run once on load in case the page was opened with a service hash already set.
+  syncWithHash();
 }
